@@ -1,0 +1,363 @@
+{
+  "components": {
+    "comp-extract-audio-from-video": {
+      "executorLabel": "exec-extract-audio-from-video",
+      "inputDefinitions": {
+        "parameters": {
+          "input_video_gcs_path": {
+            "parameterType": "STRING"
+          },
+          "output_audio_gcs_path": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-generate-subtitles": {
+      "executorLabel": "exec-generate-subtitles",
+      "inputDefinitions": {
+        "parameters": {
+          "max_chars_per_line": {
+            "defaultValue": 42.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "output_subtitles_gcs_path": {
+            "parameterType": "STRING"
+          },
+          "transcript_gcs_path": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-overlay-subtitles-on-video": {
+      "executorLabel": "exec-overlay-subtitles-on-video",
+      "inputDefinitions": {
+        "parameters": {
+          "font_color": {
+            "defaultValue": "white",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "font_size": {
+            "defaultValue": 48.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "input_video_gcs_path": {
+            "parameterType": "STRING"
+          },
+          "output_video_gcs_path": {
+            "parameterType": "STRING"
+          },
+          "subtitles_gcs_path": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-transcribe-audio": {
+      "executorLabel": "exec-transcribe-audio",
+      "inputDefinitions": {
+        "parameters": {
+          "audio_gcs_path": {
+            "parameterType": "STRING"
+          },
+          "language_code": {
+            "defaultValue": "en-US",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "output_transcript_gcs_path": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    }
+  },
+  "deploymentSpec": {
+    "executors": {
+      "exec-extract-audio-from-video": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "extract_audio_from_video"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'ffmpeg-python' 'google-cloud-storage' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef extract_audio_from_video(\n    input_video_gcs_path: str,\n    output_audio_gcs_path: str\n) -> str:\n    \"\"\"Extract MP3 audio from MP4 video.\"\"\"\n    import os\n    import subprocess\n    import tempfile\n    from google.cloud import storage\n\n    print(f\"Extracting audio from {input_video_gcs_path} to {output_audio_gcs_path}\")\n\n    # Install FFmpeg directly in the component\n    print(\"Installing FFmpeg...\")\n    subprocess.run([\"apt-get\", \"update\", \"-y\"], check=True)\n    subprocess.run([\"apt-get\", \"install\", \"-y\", \"ffmpeg\"], check=True)\n    print(\"FFmpeg installed successfully\")\n\n    # Create temporary directory for processing\n    with tempfile.TemporaryDirectory() as temp_dir:\n        # Download video from GCS\n        storage_client = storage.Client()\n\n        # Parse bucket and blob names\n        input_path = input_video_gcs_path.replace(\"gs://\", \"\")\n        bucket_name = input_path.split(\"/\")[0]\n        blob_name = \"/\".join(input_path.split(\"/\")[1:])\n\n        # Get bucket and blob\n        bucket = storage_client.bucket(bucket_name)\n        blob = bucket.blob(blob_name)\n\n        # Download to temporary file\n        local_video_path = os.path.join(temp_dir, os.path.basename(blob_name))\n        blob.download_to_filename(local_video_path)\n        print(f\"Video downloaded to {local_video_path}\")\n\n        # Extract audio using FFmpeg\n        local_audio_path = os.path.join(temp_dir, os.path.splitext(os.path.basename(blob_name))[0] + \".mp3\")\n        print(f\"Extracting audio to {local_audio_path}\")\n\n        # Using subprocess for FFmpeg\n        cmd = [\n            \"ffmpeg\", \"-i\", local_video_path, \n            \"-vn\",  # No video\n            \"-acodec\", \"mp3\",  # MP3 codec\n            \"-ab\", \"192k\",  # Bitrate\n            \"-ar\", \"44100\",  # Sample rate\n            \"-y\",  # Overwrite output file\n            local_audio_path\n        ]\n\n        try:\n            subprocess.run(cmd, check=True, capture_output=True)\n            print(\"Audio extraction completed successfully\")\n        except subprocess.CalledProcessError as e:\n            print(f\"FFmpeg error: {e.stderr.decode()}\")\n            raise RuntimeError(f\"Failed to extract audio: {e}\")\n\n        # Upload extracted audio to GCS\n        print(f\"Uploading audio to {output_audio_gcs_path}\")\n        output_path = output_audio_gcs_path.replace(\"gs://\", \"\")\n        output_bucket_name = output_path.split(\"/\")[0]\n        output_blob_name = \"/\".join(output_path.split(\"/\")[1:])\n\n        output_bucket = storage_client.bucket(output_bucket_name)\n        output_blob = output_bucket.blob(output_blob_name)\n        output_blob.upload_from_filename(local_audio_path)\n\n        print(f\"Audio extraction and upload complete\")\n\n        return output_audio_gcs_path\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      },
+      "exec-generate-subtitles": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "generate_subtitles"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'google-cloud-storage' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef generate_subtitles(\n    transcript_gcs_path: str,\n    output_subtitles_gcs_path: str,\n    max_chars_per_line: int = 42\n) -> str:\n    \"\"\"Generate an SRT file that formats words into sentences while preserving exact timing.\"\"\"\n\n    import os\n    import json\n    import tempfile\n    import re\n    from google.cloud import storage\n\n    print(f\"Generating sentence-based subtitles from {transcript_gcs_path} to {output_subtitles_gcs_path}\")\n\n    storage_client = storage.Client()\n\n    # Download transcript from GCS\n    input_path = transcript_gcs_path.replace(\"gs://\", \"\")\n    bucket_name = input_path.split(\"/\")[0]\n    blob_name = \"/\".join(input_path.split(\"/\")[1:])\n\n    bucket = storage_client.bucket(bucket_name)\n    blob = bucket.blob(blob_name)\n\n    with tempfile.TemporaryDirectory() as temp_dir:\n        local_transcript_path = os.path.join(temp_dir, \"transcript.json\")\n        blob.download_to_filename(local_transcript_path)\n\n        # Load transcript\n        with open(local_transcript_path, \"r\") as f:\n            transcript_data = json.load(f)\n\n        words = transcript_data.get(\"words\", [])\n        if not words:\n            print(\"No word-level timing information found in transcript\")\n            return None\n\n        # Function to convert time to SRT format\n        def format_time(time_str):\n            \"\"\"Convert seconds to SRT time format (HH:MM:SS,mmm)\"\"\"\n            seconds = float(time_str)\n            hours = int(seconds // 3600)\n            minutes = int((seconds % 3600) // 60)\n            seconds = seconds % 60\n            return f\"{hours:02d}:{minutes:02d}:{seconds:06.3f}\".replace(\".\", \",\")\n\n        # Group words into sentences based on punctuation\n        def is_sentence_end(word):\n            \"\"\"Check if a word marks the end of a sentence.\"\"\"\n            return bool(re.search(r'[.!?]$', word))\n\n        srt_content = \"\"\n        subtitle_count = 1\n        i = 0\n\n        while i < len(words):\n            sentence_words = []\n            start_time = words[i][\"start_time\"]\n            end_time = words[i][\"end_time\"]\n\n            while i < len(words):\n                word = words[i]\n                sentence_words.append(word[\"word\"])\n                end_time = word[\"end_time\"]\n\n                if is_sentence_end(word[\"word\"]) or i == len(words) - 1:\n                    break\n\n                i += 1\n\n            i += 1  # Move to the next word for the next subtitle\n\n            # Format sentence text to fit within max_chars_per_line\n            formatted_lines = []\n            current_line = []\n            current_line_chars = 0\n\n            for word in sentence_words:\n                if current_line_chars + len(word) + 1 > max_chars_per_line and current_line:\n                    formatted_lines.append(\" \".join(current_line))\n                    current_line = [word]\n                    current_line_chars = len(word)\n                else:\n                    current_line.append(word)\n                    current_line_chars += len(word) + (1 if current_line_chars > 0 else 0)\n\n            if current_line:\n                formatted_lines.append(\" \".join(current_line))\n\n            # Create subtitle entry\n            srt_content += f\"{subtitle_count}\\n\"\n            srt_content += f\"{format_time(start_time)} --> {format_time(end_time)}\\n\"\n            srt_content += \"\\n\".join(formatted_lines) + \"\\n\\n\"\n            subtitle_count += 1\n\n        # Save SRT file\n        local_srt_path = os.path.join(temp_dir, \"subtitles.srt\")\n        with open(local_srt_path, \"w\") as f:\n            f.write(srt_content)\n\n        # Upload to GCS\n        output_path = output_subtitles_gcs_path.replace(\"gs://\", \"\")\n        output_bucket_name = output_path.split(\"/\")[0]\n        output_blob_name = \"/\".join(output_path.split(\"/\")[1:])\n\n        output_bucket = storage_client.bucket(output_bucket_name)\n        output_blob = output_bucket.blob(output_blob_name)\n        output_blob.upload_from_filename(local_srt_path)\n\n    print(f\"Generated precise sentence-based subtitles and uploaded to {output_subtitles_gcs_path}\")\n\n    return output_subtitles_gcs_path\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      },
+      "exec-overlay-subtitles-on-video": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "overlay_subtitles_on_video"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'ffmpeg-python' 'google-cloud-storage' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef overlay_subtitles_on_video(\n    input_video_gcs_path: str,\n    subtitles_gcs_path: str,\n    output_video_gcs_path: str,\n    font_size: int = 48,\n    font_color: str = \"white\"\n) -> str:\n    \"\"\"Overlay SRT subtitles on video ensuring exact sentence-based sync.\"\"\"\n\n    import os\n    import subprocess\n    import tempfile\n    from google.cloud import storage\n\n    print(f\"Overlaying subtitles from {subtitles_gcs_path} on {input_video_gcs_path}\")\n\n    # Install FFmpeg\n    subprocess.run([\"apt-get\", \"update\", \"-y\"], check=True)\n    subprocess.run([\"apt-get\", \"install\", \"-y\", \"ffmpeg\"], check=True)\n\n    storage_client = storage.Client()\n\n    with tempfile.TemporaryDirectory() as temp_dir:\n        # Download video from GCS\n        input_video_path = input_video_gcs_path.replace(\"gs://\", \"\")\n        video_bucket_name = input_video_path.split(\"/\")[0]\n        video_blob_name = \"/\".join(input_video_path.split(\"/\")[1:])\n\n        video_bucket = storage_client.bucket(video_bucket_name)\n        video_blob = video_bucket.blob(video_blob_name)\n\n        local_video_path = os.path.join(temp_dir, os.path.basename(video_blob_name))\n        video_blob.download_to_filename(local_video_path)\n\n        # Download subtitles from GCS\n        subtitles_path = subtitles_gcs_path.replace(\"gs://\", \"\")\n        subtitles_bucket_name = subtitles_path.split(\"/\")[0]\n        subtitles_blob_name = \"/\".join(subtitles_path.split(\"/\")[1:])\n\n        subtitles_bucket = storage_client.bucket(subtitles_bucket_name)\n        subtitles_blob = subtitles_bucket.blob(subtitles_blob_name)\n\n        local_subtitles_path = os.path.join(temp_dir, \"subtitles.srt\")\n        subtitles_blob.download_to_filename(local_subtitles_path)\n\n        # Output video path\n        local_output_video_path = os.path.join(\n            temp_dir, \n            f\"{os.path.splitext(os.path.basename(video_blob_name))[0]}_with_subtitles.mp4\"\n        )\n\n        # Overlay subtitles using FFmpeg with exact timing\n        print(\"Overlaying subtitles with sentence-based exact sync\")\n        cmd = [\n            \"ffmpeg\", \"-i\", local_video_path,\n            \"-vf\", f\"subtitles={local_subtitles_path}\",\n            \"-c:a\", \"copy\",  # Preserve original audio\n            \"-y\",  # Overwrite output file\n            local_output_video_path\n        ]\n\n        try:\n            subprocess.run(cmd, check=True, capture_output=True)\n            print(\"Subtitle overlay completed successfully with exact sentence sync\")\n        except subprocess.CalledProcessError as e:\n            print(f\"FFmpeg error: {e.stderr.decode()}\")\n            raise RuntimeError(\"Failed to overlay subtitles with exact sync\")\n\n        # Upload output video to GCS\n        output_path = output_video_gcs_path.replace(\"gs://\", \"\")\n        output_bucket_name = output_path.split(\"/\")[0]\n        output_blob_name = \"/\".join(output_path.split(\"/\")[1:])\n\n        output_bucket = storage_client.bucket(output_bucket_name)\n        output_blob = output_bucket.blob(output_blob_name)\n        output_blob.upload_from_filename(local_output_video_path)\n\n        print(f\"Video with exact subtitles uploaded to {output_video_gcs_path}\")\n\n        return output_video_gcs_path\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      },
+      "exec-transcribe-audio": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "transcribe_audio"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'google-cloud-speech' 'google-cloud-storage' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef transcribe_audio(\n    audio_gcs_path: str,\n    output_transcript_gcs_path: str,\n    language_code: str = \"en-US\"\n) -> str:\n    \"\"\"Transcribe MP3 audio to text using Google Cloud Speech-to-Text.\"\"\"\n    import os\n    import json\n    import tempfile\n    from google.cloud import speech_v1p1beta1 as speech\n    from google.cloud import storage\n\n    print(f\"Transcribing audio from {audio_gcs_path} to {output_transcript_gcs_path}\")\n\n    # Create Speech-to-Text client\n    speech_client = speech.SpeechClient()\n    storage_client = storage.Client()\n\n    # Configure the speech recognition request\n    audio = speech.RecognitionAudio(uri=audio_gcs_path)\n    config = speech.RecognitionConfig(\n        encoding=speech.RecognitionConfig.AudioEncoding.MP3,\n        sample_rate_hertz=44100,\n        language_code=language_code,\n        enable_word_time_offsets=True,\n        enable_automatic_punctuation=True,\n        model=\"latest_long\"  # Use the video model for better accuracy with video content\n    )\n\n    # Start the long-running recognition operation\n    print(\"Starting transcription (this may take a while)...\")\n    operation = speech_client.long_running_recognize(config=config, audio=audio)\n\n    # Wait for operation to complete\n    response = operation.result(timeout=600)  # Increased timeout for longer audio\n    print(\"Transcription completed\")\n\n    # Process the response\n    transcript_data = {\n        \"transcript\": \"\",\n        \"words\": [],\n        \"results\": []\n    }\n\n    for result in response.results:\n        alternative = result.alternatives[0]\n        transcript_data[\"transcript\"] += alternative.transcript + \" \"\n\n        # Add detailed results\n        result_data = {\n            \"transcript\": alternative.transcript,\n            \"confidence\": alternative.confidence,\n            \"words\": []\n        }\n\n        # Add word-level information if available\n        for word_info in alternative.words:\n            # Handle different response formats (timedelta vs seconds/nanos)\n            if hasattr(word_info.start_time, 'seconds') and hasattr(word_info.start_time, 'nanos'):\n                # Old format with seconds and nanos\n                start_seconds = f\"{word_info.start_time.seconds}.{word_info.start_time.nanos//1000000:03d}\"\n                end_seconds = f\"{word_info.end_time.seconds}.{word_info.end_time.nanos//1000000:03d}\"\n            else:\n                # New format with timedelta\n                start_seconds = str(word_info.start_time.total_seconds())\n                end_seconds = str(word_info.end_time.total_seconds())\n\n            word_data = {\n                \"word\": word_info.word,\n                \"start_time\": start_seconds,\n                \"end_time\": end_seconds\n            }\n            transcript_data[\"words\"].append(word_data)\n            result_data[\"words\"].append(word_data)\n\n        transcript_data[\"results\"].append(result_data)\n\n    # Save transcript to GCS\n    with tempfile.TemporaryDirectory() as temp_dir:\n        local_transcript_path = os.path.join(temp_dir, \"transcript.json\")\n\n        with open(local_transcript_path, \"w\") as f:\n            json.dump(transcript_data, f, indent=2)\n\n        # Upload to GCS\n        print(f\"Uploading transcript to {output_transcript_gcs_path}\")\n        output_path = output_transcript_gcs_path.replace(\"gs://\", \"\")\n        output_bucket_name = output_path.split(\"/\")[0]\n        output_blob_name = \"/\".join(output_path.split(\"/\")[1:])\n\n        output_bucket = storage_client.bucket(output_bucket_name)\n        output_blob = output_bucket.blob(output_blob_name)\n        output_blob.upload_from_filename(local_transcript_path)\n\n    print(f\"Transcription saved to {output_transcript_gcs_path}\")\n\n    return output_transcript_gcs_path\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      }
+    }
+  },
+  "pipelineInfo": {
+    "description": "A pipeline that processes MP4 videos, extracts audio, generates transcriptions, and overlays subtitles",
+    "name": "video-processing-pipeline"
+  },
+  "root": {
+    "dag": {
+      "outputs": {
+        "parameters": {
+          "output_video": {
+            "valueFromParameter": {
+              "outputParameterKey": "Output",
+              "producerSubtask": "overlay-subtitles-on-video"
+            }
+          }
+        }
+      },
+      "tasks": {
+        "extract-audio-from-video": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-extract-audio-from-video"
+          },
+          "inputs": {
+            "parameters": {
+              "input_video_gcs_path": {
+                "componentInputParameter": "input_video_gcs_path"
+              },
+              "output_audio_gcs_path": {
+                "runtimeValue": {
+                  "constant": "gs://{{$.inputs.parameters['pipelinechannel--output_bucket']}}/output/audio/video.mp3"
+                }
+              },
+              "pipelinechannel--output_bucket": {
+                "componentInputParameter": "output_bucket"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "extract-audio-from-video"
+          }
+        },
+        "generate-subtitles": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-generate-subtitles"
+          },
+          "dependentTasks": [
+            "transcribe-audio"
+          ],
+          "inputs": {
+            "parameters": {
+              "output_subtitles_gcs_path": {
+                "runtimeValue": {
+                  "constant": "gs://{{$.inputs.parameters['pipelinechannel--output_bucket']}}/output/subtitles/video.srt"
+                }
+              },
+              "pipelinechannel--output_bucket": {
+                "componentInputParameter": "output_bucket"
+              },
+              "transcript_gcs_path": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "Output",
+                  "producerTask": "transcribe-audio"
+                }
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "generate-subtitles"
+          }
+        },
+        "overlay-subtitles-on-video": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-overlay-subtitles-on-video"
+          },
+          "dependentTasks": [
+            "generate-subtitles"
+          ],
+          "inputs": {
+            "parameters": {
+              "input_video_gcs_path": {
+                "componentInputParameter": "input_video_gcs_path"
+              },
+              "output_video_gcs_path": {
+                "runtimeValue": {
+                  "constant": "gs://{{$.inputs.parameters['pipelinechannel--output_bucket']}}/output/videos/video_with_subtitles.mp4"
+                }
+              },
+              "pipelinechannel--output_bucket": {
+                "componentInputParameter": "output_bucket"
+              },
+              "subtitles_gcs_path": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "Output",
+                  "producerTask": "generate-subtitles"
+                }
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "overlay-subtitles-on-video"
+          }
+        },
+        "transcribe-audio": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-transcribe-audio"
+          },
+          "dependentTasks": [
+            "extract-audio-from-video"
+          ],
+          "inputs": {
+            "parameters": {
+              "audio_gcs_path": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "Output",
+                  "producerTask": "extract-audio-from-video"
+                }
+              },
+              "language_code": {
+                "componentInputParameter": "language_code"
+              },
+              "output_transcript_gcs_path": {
+                "runtimeValue": {
+                  "constant": "gs://{{$.inputs.parameters['pipelinechannel--output_bucket']}}/output/transcripts/video.json"
+                }
+              },
+              "pipelinechannel--output_bucket": {
+                "componentInputParameter": "output_bucket"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "transcribe-audio"
+          }
+        }
+      }
+    },
+    "inputDefinitions": {
+      "parameters": {
+        "input_video_gcs_path": {
+          "parameterType": "STRING"
+        },
+        "language_code": {
+          "defaultValue": "en-US",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "output_bucket": {
+          "parameterType": "STRING"
+        }
+      }
+    },
+    "outputDefinitions": {
+      "parameters": {
+        "output_video": {
+          "parameterType": "STRING"
+        }
+      }
+    }
+  },
+  "schemaVersion": "2.1.0",
+  "sdkVersion": "kfp-2.5.0"
+}
