@@ -11,6 +11,7 @@ Pipeline architecture:
 The pipeline follows this data flow:
 Input Video (MP4) → Extract Audio → MP3 Audio → Transcribe → JSON Transcript → Generate Subtitles →
 Each component:
+
 1.Takes input from GCS
 2.Processes the data
 3.Writes output back to GCS
