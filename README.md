@@ -16,12 +16,32 @@ Each component:
 2.Processes the data
 3.Writes output back to GCS
 4.Passes the GCS path to the next component
-- once the ipynb is run in jupyter notebook it will give you a json file which we need to download and upload in vertex ai pipelines.
-Before runnning the pipelines we need to give the service account permissions:
-- go to IAM roles and choose the service account which is used in to build the pipline and click on the pencil icon which is to edit the permission roles and give these permissions
-- 1.Owner
-- 2.Editor
-- 3.service usage admin
-- 4.Storage object admin
-- 5.Vertex AI Custom Code Service Agent
-- 6.artifact registry administrator
+### Setup Instructions
+-  Step 1: Prepare Your Notebook
+  - Run the provided pipeline.ipynb in Jupyter Notebook.This will generate a pipeline.json file (your compiled pipeline definition).
+
+- Step 2: Upload Pipeline to Vertex AI
+   - Go to the Vertex AI Pipelines section in the Google Cloud Console.
+   - Click on "Upload Pipeline".
+   - Upload the generated pipeline.json.
+
+- Step 3: Set Service Account Permissions
+  - Before running the pipeline, assign the necessary roles to the service account used for pipeline execution.
+  -  How to grant permissions:
+     - Navigate to IAM & Admin in the Google Cloud Console.
+     - Find the service account used for Vertex AI Pipelines.
+     - Click the ✏️ (pencil) icon to edit roles.
+     - Assign the following roles:
+        - Owner	:Full access (optional but simplifies setup)
+        - Editor :General resource editing
+        - Service Usage Admin :	Manage service usage and quotas
+        - Storage Object Admin : Read/write access to GCS
+        - Vertex AI Custom Code Service Agent :	Needed for running custom containers
+        - Artifact Registry Administrator :	Pull/push container images
+
+- Running the Pipeline
+  - After uploading and configuring permissions:
+     - Trigger the pipeline run in Vertex AI Pipelines UI.
+     - Monitor the pipeline’s progress through each component.
+     - Final subtitled video will be written back to GCS.
+
