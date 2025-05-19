@@ -16,7 +16,7 @@ Each component:
 2.Processes the data
 3.Writes output back to GCS
 4.Passes the GCS path to the next component
-once the ipynb is run in jupyter notebook it will give you a json file which we need to download and upload in vertex ai pipelines.
+- once the ipynb is run in jupyter notebook it will give you a json file which we need to download and upload in vertex ai pipelines.
 Before runnning the pipelines we need to give the service account permissions:
 - go to IAM roles and choose the service account which is used in to build the pipline and click on the pencil icon which is to edit the permission roles and give these permissions
 1.Owner
